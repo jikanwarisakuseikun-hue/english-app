@@ -57,8 +57,6 @@ if audio_value:
         
         # 結果の解析
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            # 💡 【最新の書き方に修正しました】
-            # property として直接結果（Result）からデータを引っ張る方式に変更
             pron_result = speechsdk.PronunciationAssessmentResult(result)
             
             # スコアの表示
@@ -74,20 +72,42 @@ if audio_value:
             else:
                 st.write("📢 **もう一度チャレンジ！** お手本の英文をよく聞いて、1単語ずつていねいに読んでみよう。")
                 
-            # 単語ごとの細かいフィードバック
-            st.markdown("### 🔍 単語ごとのチェック")
+            # ---------------------------------------------------------
+            # 🎨 新機能①：単語ごとに文字色をカラフルに変える
+            # ---------------------------------------------------------
+            st.markdown("### 📝 あなたの音読結果（色チェック）")
+            colored_words = []
             words_feedback = []
+            
             for word in pron_result.words:
                 if word.error_type == "None":
-                    words_feedback.append(f"🟢 **{word.word}** (バッチリ！)")
+                    # バッチリなら緑色
+                    colored_words.append(f":green[{word.word}]")
+                    words_feedback.append(f"**{word.word}** : バッチリ！")
                 elif word.error_type == "Mispronunciation":
-                    words_feedback.append(f"🔴 **{word.word}** (おしい！発音が少し違うかも)")
+                    # 発音ミスは赤色
+                    colored_words.append(f":red[{word.word}]")
+                    words_feedback.append(f"**{word.word}** : おしい！発音が少し違うかも")
                 elif word.error_type == "Omission":
-                    words_feedback.append(f"⚪ **{word.word}** (聞き取れなかったよ。読み飛ばしたかな？)")
+                    # 読み飛ばしは灰色（打ち消し線）
+                    colored_words.append(f"~~{word.word}~~")
+                    words_feedback.append(f"**{word.word}** : 聞き取れなかったよ。読み飛ばしたかな？")
                 elif word.error_type == "Insertion":
-                    words_feedback.append(f"🟡 **{word.word}** (余分な音が混ざったかも)")
-                    
-            st.write(" | ".join(words_feedback))
+                    # 余分な音はオレンジ色
+                    colored_words.append(f":orange[{word.word}]")
+                    words_feedback.append(f"**{word.word}** : 余分な音が混ざったかも")
+            
+            # 色付きの英文を表示
+            st.subheader(" ".join(colored_words))
+            st.caption("※正解は緑色、おしい単語は赤色、聞き取れなかった単語は線が引かされます。")
+            
+            # ---------------------------------------------------------
+            # 🔍 新機能②：詳しいアドバイスをプルダウンにする（●は無し）
+            # ---------------------------------------------------------
+            st.markdown("---")
+            with st.expander("🔍 単語ごとの詳しいアドバイスを一覧で見る"):
+                for feedback in words_feedback:
+                    st.write(feedback)
             
         else:
             st.error("AIがうまく声を聴き取れませんでした。マイクに近づいてもう一度試してね。")
