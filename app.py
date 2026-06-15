@@ -1,108 +1,101 @@
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
-import json
-from audio_recorder_streamlit import audio_recorder
+import os
 
-st.set_page_config(page_title="AI音読アドバイザー", layout="wide")
+st.set_page_config(page_title="AI音読アドバイザー", layout="centered")
+st.title("🗣️ AI音読アドバイザー")
+st.write("教科書の英文を読んで、発音をチェックしてみよう！")
 
-# デザインを整える
-st.markdown("""
-    <style>
-    .main { background-color: #f8fafc; }
-    .stMetric { background-color: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
+# ---------------------------------------------------------
+# 🌟 画面のトップで奇数・偶数を選ばせる（負荷分散スイッチ）
+# ---------------------------------------------------------
+attendance_type = st.radio(
+    "あなたの 出席番号（または班） を選んでください：",
+    ["奇数番号 (1, 3, 5...)", "偶数番号 (2, 4, 6...)"],
+    horizontal=True
+)
 
-st.title("🎓 AI英語音読アドバイザー")
-st.write("あなたの英語をAIが細かく分析して、上達のアドバイスを伝えます。")
+# 選択によって、裏側で使うAIのキーを自動で切り替える
+if "奇数" in attendance_type:
+    azure_key = st.secrets["KEY_KISU"]
+else:
+    azure_key = st.secrets["KEY_GUSU"]
 
-# 設定読み込み
-AZURE_KEY = st.secrets["AZURE_KEY"]
-AZURE_REGION = st.secrets["AZURE_REGION"]
+azure_region = st.secrets["AZURE_REGION"]
 
-# 入力エリア
-col_in, col_rec = st.columns([2, 1])
-with col_in:
-    reference_text = st.text_area("本文を貼り付けてください", "The quick brown fox jumps over the lazy dog.", height=150)
+# ---------------------------------------------------------
+# 📖 音読する英文の設定
+# ---------------------------------------------------------
+reference_text = st.text_input("練習する英文（先生がここに入力するか、生徒がコピーして貼り付けます）：", "Welcome to our school. Let's study English together.")
 
-with col_rec:
-    st.write("🎙️ 録音ボタン")
-    audio_bytes = audio_recorder(text="クリックして録音", pause_threshold=2.5, sample_rate=16000)
+st.markdown("---")
+st.subheader("🎤 録音スタート")
 
-if audio_bytes:
+# Streamlit標準のマイク録音機能
+audio_value = st.audio_input("マイクボタンを押して英語を読んでね")
+
+if audio_value:
+    st.info("AIが発音を分析中... 少し待ってね 🤖")
+
+    # 録音データを一時的なファイルとして保存
     with open("temp_audio.wav", "wb") as f:
-        f.write(audio_bytes)
-    
-    st.audio(audio_bytes, format="audio/wav")
+        f.write(audio_value.read())
 
-    # Azure設定
-    speech_config = speechsdk.SpeechConfig(subscription=AZURE_KEY, region=AZURE_REGION)
-    audio_config = speechsdk.audio.AudioConfig(filename="temp_audio.wav")
-    
-    # 粒度を「音素（Phoneme）」レベルまで詳細化
-    pron_config = speechsdk.PronunciationAssessmentConfig(
-        reference_text=reference_text,
-        grading_system=speechsdk.PronunciationAssessmentGradingSystem.HundredMark,
-        granularity=speechsdk.PronunciationAssessmentGranularity.Phoneme
-    )
+    try:
+        # Azure Speech SDKの設定
+        speech_config = speechsdk.SpeechConfig(subscription=azure_key, region=azure_region)
+        audio_config = speechsdk.audio.AudioConfig(filename="temp_audio.wav")
 
-    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config, language="en-US")
-    pron_config.apply_to(recognizer)
-    
-    with st.spinner('AIが詳細分析中... 少々お待ちください'):
-        result = recognizer.recognize_once()
+        # 発音評価（Pronunciation Assessment）の設定
+        pronunciation_config = speechsdk.PronunciationAssessmentConfig(
+            json_string=f'{{"referenceText":"{reference_text}","gradingSystem":"HundredMark","granularity":"Word","phonemeAlphabet":"IPA"}}'
+       )
 
-    if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-        res_json = json.loads(result.properties.get(speechsdk.PropertyId.SpeechServiceResponse_JsonResult))
-        
-        # 全体スコアの表示
-        acc_score = res_json["NBest"][0]["PronunciationAssessment"]["AccuracyScore"]
-        flu_score = res_json["NBest"][0]["PronunciationAssessment"]["FluencyScore"]
-        comp_score = res_json["NBest"][0]["PronunciationAssessment"]["CompletenessScore"]
+        speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+        pronunciation_config.apply_to(speech_recognizer)
 
-        st.subheader("📊 全体評価")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("正確さ", f"{int(acc_score)}点")
-        m2.metric("流暢さ", f"{int(flu_score)}点")
-        m3.metric("読み落としなし", f"{int(comp_score)}点")
+        # AIの判定を実行
+        result = speech_recognizer.recognize_once_async().get()
 
-        # 単語ごとの分析と色分け
-        words = res_json["NBest"][0]["Words"]
-        st.subheader("🎯 単語ごとの指摘")
-        
-        display_html = "<div style='font-size: 24px; line-height: 2.2; margin-bottom: 20px;'>"
-        advice_list = []
+        # 結果の解析
+        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            pron_result = speechsdk.PronunciationAssessmentResult.from_result(result)
 
-        for w in words:
-            word_text = w["Word"]
-            p_assess = w["PronunciationAssessment"]
-            score = p_assess["AccuracyScore"]
-            err_type = p_assess.get("ErrorType", "None")
+            # スコアの表示
+            st.success(f"🎉 あなたの発音スコア: {int(pron_result.accuracy_score)} 点 / 100点")
 
-            # 色の決定
-            color = "#10b981" # 緑
-            if err_type == "Omission":
-                color = "#64748b" # グレー（読み飛ばし）
-                advice_list.append(f"⚠️ **{word_text}**: 読み飛ばされているか、声が小さくて聞こえませんでした。")
-            elif score < 60:
-                color = "#f43f5e" # 赤
-                advice_list.append(f"❌ **{word_text}**: 発音が少し違うようです。母音や子音をはっきり発声しましょう。")
-            elif score < 85:
-                color = "#f59e0b" # 黄
-                advice_list.append(f"🤔 **{word_text}**: おしい！もう少しネイティブの発音を意識してみましょう。")
+            # 点数に応じたアドバイス
+            score = pron_result.accuracy_score
+            if score >= 85:
+                st.balloons()
+                st.write("🏅 **すばらしい！** ネイティブに近いキレイな発音です。その調子！")
+            elif score >= 60:
+                st.write("👍 **Nice try!** よく聞き取れました。もう少しはっきりと声を出してみよう。")
+            else:
+                st.write("📢 **もう一度チャレンジ！** お手本の英文をよく聞いて、1単語ずつていねいに読んでみよう。")
 
-            display_html += f"<span style='color: {color}; border-bottom: 3px solid {color}; margin-right: 10px; font-weight: bold;'>{word_text}</span>"
-        
-        display_html += "</div>"
-        st.markdown(display_html, unsafe_allow_html=True)
+            # 単語ごとの細かいフィードバック
+            st.markdown("### 🔍 単語ごとのチェック")
+            words_feedback = []
+            for word in pron_result.words:
+                if word.error_type == "None":
+                    words_feedback.append(f"🟢 **{word.word}** (バッチリ！)")
+                elif word.error_type == "Mispronunciation":
+                    words_feedback.append(f"🔴 **{word.word}** (おしい！発音が少し違うかも)")
+                elif word.error_type == "Omission":
+                    words_feedback.append(f"⚪ **{word.word}** (聞き取れなかったよ。読み飛ばしたかな？)")
+                elif word.error_type == "Insertion":
+                    words_feedback.append(f"🟡 **{word.word}** (余分な音が混ざったかも)")
 
-        # AIからの具体的なアドバイス
-        if advice_list:
-            with st.expander("💡 もっと良くするためのアドバイス"):
-                for advice in advice_list:
-                    st.write(advice)
+            st.write(" | ".join(words_feedback))
+
         else:
-            st.success("素晴らしい！完璧な音読です。")
+            st.error("AIがうまく声を聴き取れませんでした。マイクに近づいてもう一度試してね。")
 
-    else:
-        st.error("うまく聞き取れませんでした。もう一度、マイクの近くではっきり読んでみてください。")
+    except Exception as e:
+        st.error(f"システムエラーが発生しました。先生に報告してください。")
+
+    finally:
+        # 一時ファイルの削除
+        if os.path.exists("temp_audio.wav"):
+            os.remove("temp_audio.wav")
