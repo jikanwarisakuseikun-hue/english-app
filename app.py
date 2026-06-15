@@ -57,8 +57,9 @@ if audio_value:
         
         # 結果の解析
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            # 💡 【ここを修正しました！】大文字の FromResult に直しました
-            pron_result = speechsdk.PronunciationAssessmentResult.from_result(result)
+            # 💡 【最新の書き方に修正しました】
+            # property として直接結果（Result）からデータを引っ張る方式に変更
+            pron_result = speechsdk.PronunciationAssessmentResult(result)
             
             # スコアの表示
             st.success(f"🎉 あなたの発音スコア: {int(pron_result.accuracy_score)} 点 / 100点")
